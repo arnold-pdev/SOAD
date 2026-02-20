@@ -1,0 +1,503 @@
+# TimoshenkoProblem.jl — Orthotropic Timoshenko cantilever beam
+#
+# Problem statement
+# -----------------
+# Find the orientation field θ(x) ∈ [0, π) of an orthotropic elastic beam
+# (length L, clamped at x=0, tip load P at x=L) that minimises the
+# regularised compliance
+#
+#   J(θ) = U(w*(θ), ψ*(θ), θ) - (γ/2) ∫₀ᴸ (θ')² dx
+#
+# where the potential energy is
+#
+#   U(w, ψ, θ) = (1/2) ∫₀ᴸ [ B(θ)(ψ')² + S(θ)(ψ - w')² ] dx  -  P·w(L)
+#
+# and the equilibrium state (w*, ψ*) satisfies the Timoshenko equations
+#
+#   [S(θ)(ψ - w')]'  = 0       (shear equilibrium)   => V = -P = const
+#   [B(θ) ψ']'       = -V = P  (moment equilibrium)
+#   w(0) = ψ(0) = 0            (clamped BC)
+#
+# Stiffness (orthotropic cosine-square model)
+# -------------------------------------------
+#   B(θ) = B₀ + ΔB·cos²(θ)
+#   S(θ) = S₀ + ΔS·cos²(θ - δ)
+#
+# where δ is a phase offset between the bending and shear anisotropy axes.
+#
+# Discretisation
+# --------------
+# Staggered finite-difference grid with n cells:
+#   cell centres:  xᵢ = (i - 1/2)h,  i = 1,…,n   (w, ψ, θ live here)
+#   cell edges:    x_{i+1/2} = i·h,  i = 0,…,n   (fluxes computed here)
+#   h = L/n
+#
+# State vector layout
+# -------------------
+# state = [w₁, w₂, …, wₙ, ψ₁, ψ₂, …, ψₙ]   (length 2n)
+# design = [θ₁, θ₂, …, θₙ]                   (length n)
+#
+# Gradient sign convention
+# ------------------------
+# energy_gradients returns (grad_state, grad_design) where:
+#   grad_state[1:n]       = ∂U/∂w (positive → decreases w to reduce U)
+#   grad_state[n+1:2n]    = ∂U/∂ψ
+#   grad_design           = ∂J/∂θ (positive → increases θ; minimising J
+#                                   means moving opposite to grad_design)
+#
+# The solver is responsible for deciding the sign (ascent vs descent) and
+# the timescale of each update.
+
+# ============================================================
+#  Parameters
+# ============================================================
+
+"""
+    TimoshenkoParams
+
+All physical and numerical parameters for the orthotropic Timoshenko beam.
+
+Fields
+------
+- `L`   : beam length
+- `P`   : tip load (negative = downward)
+- `B0`  : baseline bending stiffness
+- `ΔB`  : bending stiffness anisotropy amplitude
+- `S0`  : baseline shear stiffness
+- `ΔS`  : shear stiffness anisotropy amplitude
+- `δ`   : phase offset between bending and shear anisotropy (radians)
+- `γ`   : Tikhonov regularisation weight on ∫(θ')²
+- `n`   : number of grid cells
+"""
+struct TimoshenkoParams
+    L  ::Float64
+    P  ::Float64
+    B0 ::Float64
+    ΔB ::Float64
+    S0 ::Float64
+    ΔS ::Float64
+    δ  ::Float64
+    γ  ::Float64
+    n  ::Int
+end
+
+"""
+    TimoshenkoParams(; kwargs...) -> TimoshenkoParams
+
+Keyword constructor with physically motivated defaults.
+
+Default values correspond to a highly anisotropic material (ΔB, ΔS ≫ B₀, S₀)
+for which the orientation problem is non-trivial and multiple local optima
+exist.
+"""
+function TimoshenkoParams(;
+    L  = 3.0,
+    P  = -5.0,
+    B0 = 1.0,
+    ΔB = 19.0,
+    S0 = 1.0,
+    ΔS = 19.0,
+    δ  = π/4,
+    γ  = 0.001,
+    n  = 100
+)
+    TimoshenkoParams(L, P, B0, ΔB, S0, ΔS, δ, γ, n)
+end
+
+# ============================================================
+#  Stiffness and its derivatives
+# ============================================================
+
+@inline B(θ, p::TimoshenkoParams)  = p.B0 + p.ΔB * cos(θ)^2
+@inline S(θ, p::TimoshenkoParams)  = p.S0 + p.ΔS * cos(θ - p.δ)^2
+
+# dB/dθ = -ΔB sin(2θ)
+@inline dB(θ, p::TimoshenkoParams) = -p.ΔB * sin(2θ)
+
+# dS/dθ = -ΔS sin(2(θ - δ))
+@inline dS(θ, p::TimoshenkoParams) = -p.ΔS * sin(2*(θ - p.δ))
+
+# ============================================================
+#  Staggered grid helper
+# ============================================================
+
+struct StaggeredGrid
+    n    ::Int
+    h    ::Float64
+    x    ::Vector{Float64}   # cell centres
+end
+
+function StaggeredGrid(L::Float64, n::Int)
+    h = L / n
+    x = [(i - 0.5)*h for i in 1:n]
+    StaggeredGrid(n, h, x)
+end
+
+# ============================================================
+#  Concrete problem type
+# ============================================================
+
+"""
+    TimoshenkoProblem
+
+Concrete implementation of `AbstractProblem` for the orthotropic Timoshenko
+cantilever beam orientation-optimisation problem.
+
+Construction
+------------
+```julia
+p = TimoshenkoProblem()                       # default parameters
+p = TimoshenkoProblem(TimoshenkoParams(n=200, γ=0.01))
+```
+
+State and design layout
+-----------------------
+- `state`  length 2n: [w₁…wₙ, ψ₁…ψₙ]
+- `design` length n:  [θ₁…θₙ]
+
+The equilibrium state for a given θ can be recovered analytically via
+`equilibrium_state`, which integrates the Timoshenko equations using the
+trapezoidal rule.
+"""
+struct TimoshenkoProblem <: AbstractProblem
+    params ::TimoshenkoParams
+    grid   ::StaggeredGrid
+end
+
+TimoshenkoProblem() = TimoshenkoProblem(TimoshenkoParams())
+TimoshenkoProblem(p::TimoshenkoParams) = TimoshenkoProblem(p, StaggeredGrid(p.L, p.n))
+
+problem_name(::TimoshenkoProblem) = "Timoshenko cantilever (orthotropic)"
+
+# ---- dimensions ------------------------------------------------------------
+
+state_dim(p::TimoshenkoProblem)  = 2 * p.grid.n   # w and ψ concatenated
+design_dim(p::TimoshenkoProblem) = p.grid.n
+
+grid_points(p::TimoshenkoProblem) = p.grid.x
+
+# ---- initial conditions ----------------------------------------------------
+
+"""
+    initial_state(p::TimoshenkoProblem) -> Vector{Float64}
+
+Zero state (beam unloaded, satisfies the clamped BC trivially).
+"""
+initial_state(p::TimoshenkoProblem) = zeros(2 * p.grid.n)
+
+"""
+    initial_design(p::TimoshenkoProblem) -> Vector{Float64}
+
+Uniform orientation θ ≡ π/4.  This is a non-degenerate starting point that
+avoids the symmetry axis of both B and S and lies in the interior of [0, π).
+"""
+initial_design(p::TimoshenkoProblem) = fill(π/4, p.grid.n)
+
+# ---- boundary conditions ---------------------------------------------------
+
+"""
+    enforce_state_bcs!(p, state)
+
+Enforce the clamped (Dirichlet) BC: w(0) = ψ(0) = 0.
+
+On the staggered grid the first cell centre is at x₁ = h/2.  The effective
+Dirichlet condition is applied by zeroing the first cell value, which is a
+standard ghost-cell / half-cell interpretation consistent with the finite-
+difference stencil used in `energy_gradients`.
+"""
+function enforce_state_bcs!(p::TimoshenkoProblem, state)
+    state[1]             = 0.0   # w(0) = 0
+    state[p.grid.n + 1]  = 0.0   # ψ(0) = 0
+    return state
+end
+
+"""
+    enforce_design_bcs!(p, design)
+
+Wrap orientation angles into [0, π).  Because the material is invariant under
+θ → θ + π (no sense in a fiber direction), this keeps the design in a
+canonical fundamental domain.
+"""
+function enforce_design_bcs!(p::TimoshenkoProblem, design)
+    @. design = mod(design, π)
+    return design
+end
+
+# ---- stable timestep -------------------------------------------------------
+
+"""
+    stable_dt(p, state, design) -> Float64
+
+Explicit-Euler CFL estimate:
+
+    dt ≤ 0.5 · h² / max(B, S)
+
+This is the standard parabolic CFL for the second-order finite-difference
+operator that appears in both the w and ψ equations.
+"""
+function stable_dt(p::TimoshenkoProblem, state, design)
+    h = p.grid.h
+    Bmax = maximum(θ -> B(θ, p.params), design)
+    Smax = maximum(θ -> S(θ, p.params), design)
+    return 0.5 * h^2 / max(Bmax, Smax)
+end
+
+# ---- objective -------------------------------------------------------------
+
+"""
+    objective(p, state, design) -> Float64
+
+Regularised compliance
+
+    J = U(w, ψ, θ) - (γ/2) ∫ (θ')² dx
+
+where
+
+    U = (1/2) ∫ [ B(θ)(ψ')² + S(θ)(ψ - w')² ] dx  -  P·w(L)
+
+Discrete approximation uses the trapezoidal rule on interior edges.
+"""
+function objective(p::TimoshenkoProblem, state, design)
+    pr = p.params
+    g  = p.grid
+
+    w   = @view state[1:g.n]
+    ψ   = @view state[g.n+1:2*g.n]
+    θ   = design
+
+    U   = _potential_energy(w, ψ, θ, pr, g)
+    E_D = _dirichlet_energy(θ, g)
+    return U - pr.γ * E_D
+end
+
+# ---- energy gradients ------------------------------------------------------
+
+"""
+    energy_gradients(p, state, design) -> (grad_state, grad_design)
+
+Compute L²-gradient vectors for the regularised compliance.
+
+Returns
+-------
+- `grad_state`  :: Vector{Float64} of length 2n
+    Concatenation of [∂U/∂w, ∂U/∂ψ].  The solver should subtract this from
+    the state velocity (gradient-descent on U).
+
+- `grad_design` :: Vector{Float64} of length n
+    ∂J/∂θ.  The solver should *add* this to the design velocity (gradient-
+    *ascent* on J — equivalently, descent on -J = compliance).
+
+Derivation sketch (continuous → discrete)
+-----------------------------------------
+The functional derivatives of U w.r.t. the state fields are:
+
+    δU/δw  =  ∂ₓ[S(θ)(ψ - w')]   (with BC term -P·δ(x-L))
+    δU/δψ  = -∂ₓ[B(θ)ψ'] + S(θ)(ψ - w')
+
+The functional derivative of J w.r.t. θ is:
+
+    δJ/δθ = (1/2)[B'(θ)(ψ')² + S'(θ)(ψ - w')²] + γ·θ''
+
+All spatial derivatives are discretised with second-order centred differences
+on the staggered grid.  Edge-centred quantities are computed as arithmetic
+averages of adjacent cell values.
+"""
+function energy_gradients(p::TimoshenkoProblem, state, design)
+    pr = p.params
+    g  = p.grid
+    n  = g.n
+    h  = g.h
+
+    w  = @view state[1:n]
+    ψ  = @view state[n+1:2n]
+    θ  = design
+
+    grad_w    = zeros(n)
+    grad_ψ    = zeros(n)
+    grad_θ    = zeros(n)
+
+    # ----------------------------------------------------------------
+    # Loop over interior edges  i = 1, …, n-1
+    # Edge i lies between cell i and cell i+1.
+    # ----------------------------------------------------------------
+    for i in 1:n-1
+        # Edge-averaged quantities
+        θ_e  = 0.5 * (θ[i] + θ[i+1])
+        ψ_e  = 0.5 * (ψ[i] + ψ[i+1])
+
+        # Finite-difference derivatives at edge i
+        ψ′_e = (ψ[i+1] - ψ[i]) / h    # ψ' at edge
+        w′_e = (w[i+1] - w[i]) / h    # w' at edge
+
+        # Stiffness at edge
+        B_e  = B(θ_e, pr)
+        S_e  = S(θ_e, pr)
+        dB_e = dB(θ_e, pr)
+        dS_e = dS(θ_e, pr)
+
+        # Shear strain at edge
+        γ_e  = ψ_e - w′_e
+
+        # ---- grad_w : ∂U/∂w from S(θ)γ flux divergence ----
+        # Contribution of shear flux across edge i to adjacent cells:
+        #   ∂U/∂w[i]   += +S_e · γ_e  (outgoing from cell i)
+        #   ∂U/∂w[i+1] -= +S_e · γ_e  (incoming to cell i+1)
+        flux_w          = S_e * γ_e
+        grad_w[i]      += flux_w
+        grad_w[i+1]    -= flux_w
+
+        # ---- grad_ψ : ∂U/∂ψ from bending + shear ----
+        # Bending flux  B_e·ψ'_e  contributes ±1/h per adjacent cell.
+        # Shear  S_e·γ_e  is split equally (h/2 weight per cell).
+        bending_flux    = B_e * ψ′_e
+        grad_ψ[i]      += (-bending_flux + 0.5*h * S_e * γ_e) / h * h
+        grad_ψ[i+1]    += ( bending_flux + 0.5*h * S_e * γ_e) / h * h
+        # Simplify: factor of h/h = 1 from the flux; 0.5*h from the cell weight
+        # Rewrite cleanly:
+        grad_ψ[i]      = grad_ψ[i]   # accumulated above; see below for the clean pass
+
+        # ---- grad_θ : ∂J/∂θ from stiffness anisotropy ----
+        # δJ/δθ (edge contribution) = (h/2)[dB·(ψ'²) + dS·γ²]  per edge
+        # Split equally between the two adjacent cell centres.
+        dE_dθ_edge = 0.5*h * (dB_e * ψ′_e^2 + dS_e * γ_e^2)
+        grad_θ[i]      += 0.5 * dE_dθ_edge
+        grad_θ[i+1]    += 0.5 * dE_dθ_edge
+    end
+
+    # Redo the grad_ψ accumulation with a clean two-pass approach
+    # to avoid the messy in-place accumulation above.
+    grad_ψ .= 0.0
+    for i in 1:n-1
+        θ_e  = 0.5 * (θ[i] + θ[i+1])
+        ψ_e  = 0.5 * (ψ[i] + ψ[i+1])
+        ψ′_e = (ψ[i+1] - ψ[i]) / h
+        w′_e = (w[i+1] - w[i]) / h
+        B_e  = B(θ_e, pr)
+        S_e  = S(θ_e, pr)
+        γ_e  = ψ_e - w′_e
+
+        # Divergence of bending flux: +B_e·ψ'_e into cell i+1, −into cell i
+        grad_ψ[i]   -= B_e * ψ′_e     # -∂ₓ(Bψ') contribution at cell i
+        grad_ψ[i+1] += B_e * ψ′_e     # ∂ₓ(Bψ') contribution at cell i+1
+
+        # Shear term: S_e·γ_e distributed equally to both cells
+        grad_ψ[i]   += 0.5 * h * S_e * γ_e
+        grad_ψ[i+1] += 0.5 * h * S_e * γ_e
+    end
+    # Normalise: divide by h to get the L²-gradient (not integrated)
+    grad_ψ ./= h
+
+    # ---- Tip load contribution to grad_w ----
+    # External work W = P·w(L) contributes -P to ∂U/∂w at the last cell.
+    grad_w[n] -= pr.P
+
+    # ---- θ regularisation: +γ·θ'' ----
+    # We want ∂J/∂θ = ∂U/∂θ + γ·θ'' (Tikhonov).
+    # Discrete Laplacian with zero-flux (Neumann) BCs on θ:
+    grad_θ .+= _theta_laplacian(θ, pr.γ, h)
+
+    grad_state  = vcat(grad_w, grad_ψ)
+    grad_design = grad_θ
+    return grad_state, grad_design
+end
+
+# ---- equilibrium solve -----------------------------------------------------
+
+"""
+    equilibrium_state(p, design) -> Vector{Float64}
+
+Compute the Timoshenko equilibrium state u*(θ) analytically for a given
+design field θ.
+
+For a cantilever with tip shear load P and no distributed loads, the
+equilibrium can be integrated directly:
+
+    ψ'(x) = P(L - x) / B(θ(x))     ⟹  ψ via trapezoidal integration
+    w'(x) = ψ(x) + P / S(θ(x))     ⟹  w via trapezoidal integration
+
+with BCs ψ(0) = w(0) = 0.
+
+This exact (no Newton solve needed) equilibrium recovery is specific to the
+cantilever geometry with a single tip load.  For other BCs or distributed
+loads the function would need to be replaced with a linear system solve.
+"""
+function equilibrium_state(p::TimoshenkoProblem, design)
+    pr = p.params
+    g  = p.grid
+    n  = g.n
+    h  = g.h
+    x  = g.x
+    θ  = design
+
+    w  = zeros(n)
+    ψ  = zeros(n)
+
+    # Precompute dψ/dx = P(L - x) / B(θ) at each cell centre
+    dψdx = [pr.P * (pr.L - x[i]) / B(θ[i], pr) for i in 1:n]
+
+    # Integrate from x=0 (cell 1 is at h/2; ghost cell at 0 has ψ=w=0)
+    # Use trapezoidal rule between consecutive cell centres.
+    # For cell 1: integrate from 0 to x₁ ≈ h/2 using midpoint rule
+    ψ[1] = dψdx[1] * x[1]
+    w[1] = (pr.P / S(θ[1], pr)) * x[1]   # ψ(0)=0, so dw/dx ≈ P/S at left
+
+    for i in 2:n
+        Δx    = x[i] - x[i-1]
+        # ψ: trapezoidal rule
+        ψ[i]  = ψ[i-1] + 0.5 * Δx * (dψdx[i-1] + pr.P * (pr.L - x[i]) / B(θ[i], pr))
+        # w: trapezoidal rule — dw/dx = ψ + P/S(θ)
+        dw_prev = ψ[i-1] + pr.P / S(θ[i-1], pr)
+        dw_curr = ψ[i]   + pr.P / S(θ[i],   pr)
+        w[i]  = w[i-1] + 0.5 * Δx * (dw_prev + dw_curr)
+    end
+
+    return vcat(w, ψ)
+end
+
+# ============================================================
+#  Private helpers
+# ============================================================
+
+# Discrete potential energy  U = E_bending + E_shear - W_tip
+function _potential_energy(w, ψ, θ, pr, g)
+    n = g.n
+    h = g.h
+    U = 0.0
+    for i in 1:n-1
+        θ_e  = 0.5 * (θ[i] + θ[i+1])
+        ψ_e  = 0.5 * (ψ[i] + ψ[i+1])
+        ψ′_e = (ψ[i+1] - ψ[i]) / h
+        w′_e = (w[i+1] - w[i]) / h
+        γ_e  = ψ_e - w′_e
+        U   += 0.5 * h * (B(θ_e, pr) * ψ′_e^2 + S(θ_e, pr) * γ_e^2)
+    end
+    U -= pr.P * w[n]   # tip work W = P·w(L)
+    return U
+end
+
+# Discrete Dirichlet energy  (1/2) ∫ (θ')² dx — NOT pre-multiplied by γ
+function _dirichlet_energy(θ, g)
+    n = g.n
+    h = g.h
+    E = 0.0
+    for i in 1:n-1
+        θ′ = (θ[i+1] - θ[i]) / h
+        E += 0.5 * h * θ′^2
+    end
+    return E
+end
+
+# Discrete Laplacian for θ with zero-flux (Neumann) BCs.
+# Returns γ·θ'' as a vector of length n, for adding to grad_θ.
+function _theta_laplacian(θ, γ, h)
+    n   = length(θ)
+    lap = zeros(n)
+    for i in 2:n-1
+        lap[i] = γ * (θ[i-1] - 2θ[i] + θ[i+1]) / h^2
+    end
+    # Neumann BC: one-sided differences at boundaries
+    # θ'(0) = 0  ⟹  θ[0] = θ[1]  (ghost cell)
+    lap[1] = γ * (θ[2]   - θ[1])   / h^2   # second difference with ghost θ[0] = θ[1]
+    lap[n] = γ * (θ[n-1] - θ[n])   / h^2   # second difference with ghost θ[n+1] = θ[n]
+    return lap
+end
