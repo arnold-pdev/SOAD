@@ -157,22 +157,21 @@ for (label, solver) in [("(A)", solverA), ("(B)", solverB),
 end
 
 # ============================================================
-#  Optional: convergence plot using UnicodePlots (if available)
+#  Plotting (Plots.jl or UnicodePlots)
 # ============================================================
 
-if Base.find_package("UnicodePlots") !== nothing
+hists = [histA, histB, histC, histD]
+labels = ["(A) 1st joint", "(B) 1st constrained", "(C) Nesterov", "(D) FIRE"]
+
+if Base.find_package("Plots") !== nothing
+    using Plots
+    p = plot_convergence(hists, labels; save_path=joinpath(@__DIR__, "..", "demo_convergence.png"))
+    display(p)
+elseif Base.find_package("UnicodePlots") !== nothing
     using UnicodePlots
-    plts = [
-        lineplot(histA.t, log10.(histA.grad_design_norm .+ 1e-16);
-                 title="log₁₀|∇θ| vs t", name="(A) 1st joint",
-                 xlabel="t", ylabel="log₁₀|∇θ|"),
-        lineplot!(histB.t, log10.(histB.grad_design_norm .+ 1e-16); name="(B) 1st constrained"),
-        lineplot!(histC.t, log10.(histC.grad_design_norm .+ 1e-16); name="(C) Nesterov"),
-        lineplot!(histD.t, log10.(histD.grad_design_norm .+ 1e-16); name="(D) FIRE"),
-    ]
-    println(plts[end])
+    println(plot_convergence_unicode(hists, labels))
 else
-    println("(Install UnicodePlots for a terminal convergence plot.)")
+    println("(Install Plots or UnicodePlots for convergence plots.)")
     println()
     println("Convergence data available in histA, histB, histC, histD:")
     println("  fields: .t, .objective, .grad_design_norm, .grad_state_norm")

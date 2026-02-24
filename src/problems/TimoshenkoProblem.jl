@@ -3,10 +3,10 @@
 # Problem statement
 # -----------------
 # Find the orientation field θ(x) ∈ [0, π) of an orthotropic elastic beam
-# (length L, clamped at x=0, tip load P at x=L) that minimises the
-# regularised compliance
+# (length L, clamped at x=0, tip load P at x=L) that minimizes the
+# regularized compliance
 #
-#   J(θ) = U(w*(θ), ψ*(θ), θ) - (γ/2) ∫₀ᴸ (θ')² dx
+#   J(θ) = U(w*(θ), ψ*(θ), θ) - (φ/2) ∫₀ᴸ (θ')² dx
 #
 # where the potential energy is
 #
@@ -66,7 +66,7 @@ Fields
 - `S0`  : baseline shear stiffness
 - `ΔS`  : shear stiffness anisotropy amplitude
 - `δ`   : phase offset between bending and shear anisotropy (radians)
-- `γ`   : Tikhonov regularisation weight on ∫(θ')²
+- `φ`   : Tikhonov regularisation weight on ∫(θ')²
 - `n`   : number of grid cells
 """
 struct TimoshenkoParams
@@ -77,7 +77,7 @@ struct TimoshenkoParams
     S0 ::Float64
     ΔS ::Float64
     δ  ::Float64
-    γ  ::Float64
+    φ  ::Float64
     n  ::Int
 end
 
@@ -98,10 +98,10 @@ function TimoshenkoParams(;
     S0 = 1.0,
     ΔS = 19.0,
     δ  = π/4,
-    γ  = 0.001,
+    φ  = 0.001,
     n  = 100
 )
-    TimoshenkoParams(L, P, B0, ΔB, S0, ΔS, δ, γ, n)
+    TimoshenkoParams(L, P, B0, ΔB, S0, ΔS, δ, φ, n)
 end
 
 # ============================================================
@@ -247,9 +247,9 @@ end
 """
     objective(p, state, design) -> Float64
 
-Regularised compliance
+Regularized compliance
 
-    J = U(w, ψ, θ) - (γ/2) ∫ (θ')² dx
+    J = U(w, ψ, θ) - (φ/2) ∫ (θ')² dx
 
 where
 
@@ -267,7 +267,7 @@ function objective(p::TimoshenkoProblem, state, design)
 
     U   = _potential_energy(w, ψ, θ, pr, g)
     E_D = _dirichlet_energy(θ, g)
-    return U - pr.γ * E_D
+    return U - pr.φ * E_D
 end
 
 # ---- energy gradients ------------------------------------------------------
@@ -275,7 +275,7 @@ end
 """
     energy_gradients(p, state, design) -> (grad_state, grad_design)
 
-Compute L²-gradient vectors for the regularised compliance.
+Compute L²-gradient vectors for the regularized compliance.
 
 Returns
 -------
@@ -296,9 +296,9 @@ The functional derivatives of U w.r.t. the state fields are:
 
 The functional derivative of J w.r.t. θ is:
 
-    δJ/δθ = (1/2)[B'(θ)(ψ')² + S'(θ)(ψ - w')²] + γ·θ''
+    δJ/δθ = (1/2)[B'(θ)(ψ')² + S'(θ)(ψ - w')²] + φ·θ''
 
-All spatial derivatives are discretised with second-order centred differences
+All spatial derivatives are discretized with second-order centred differences
 on the staggered grid.  Edge-centred quantities are computed as arithmetic
 averages of adjacent cell values.
 """
@@ -336,30 +336,30 @@ function energy_gradients(p::TimoshenkoProblem, state, design)
         dS_e = dS(θ_e, pr)
 
         # Shear strain at edge
-        γ_e  = ψ_e - w′_e
+        φ_e  = ψ_e - w′_e
 
-        # ---- grad_w : ∂U/∂w from S(θ)γ flux divergence ----
+        # ---- grad_w : ∂U/∂w from S(θ)φ flux divergence ----
         # Contribution of shear flux across edge i to adjacent cells:
-        #   ∂U/∂w[i]   += +S_e · γ_e  (outgoing from cell i)
-        #   ∂U/∂w[i+1] -= +S_e · γ_e  (incoming to cell i+1)
-        flux_w          = S_e * γ_e
+        #   ∂U/∂w[i]   += +S_e · φ_e  (outgoing from cell i)
+        #   ∂U/∂w[i+1] -= +S_e · φ_e  (incoming to cell i+1)
+        flux_w          = S_e * φ_e
         grad_w[i]      += flux_w
         grad_w[i+1]    -= flux_w
 
         # ---- grad_ψ : ∂U/∂ψ from bending + shear ----
         # Bending flux  B_e·ψ'_e  contributes ±1/h per adjacent cell.
-        # Shear  S_e·γ_e  is split equally (h/2 weight per cell).
+        # Shear  S_e·φ_e  is split equally (h/2 weight per cell).
         bending_flux    = B_e * ψ′_e
-        grad_ψ[i]      += (-bending_flux + 0.5*h * S_e * γ_e) / h * h
-        grad_ψ[i+1]    += ( bending_flux + 0.5*h * S_e * γ_e) / h * h
+        grad_ψ[i]      += (-bending_flux + 0.5*h * S_e * φ_e) / h * h
+        grad_ψ[i+1]    += ( bending_flux + 0.5*h * S_e * φ_e) / h * h
         # Simplify: factor of h/h = 1 from the flux; 0.5*h from the cell weight
         # Rewrite cleanly:
         grad_ψ[i]      = grad_ψ[i]   # accumulated above; see below for the clean pass
 
         # ---- grad_θ : ∂J/∂θ from stiffness anisotropy ----
-        # δJ/δθ (edge contribution) = (h/2)[dB·(ψ'²) + dS·γ²]  per edge
+        # δJ/δθ (edge contribution) = (h/2)[dB·(ψ'²) + dS·φ²]  per edge
         # Split equally between the two adjacent cell centres.
-        dE_dθ_edge = 0.5*h * (dB_e * ψ′_e^2 + dS_e * γ_e^2)
+        dE_dθ_edge = 0.5*h * (dB_e * ψ′_e^2 + dS_e * φ_e^2)
         grad_θ[i]      += 0.5 * dE_dθ_edge
         grad_θ[i+1]    += 0.5 * dE_dθ_edge
     end
@@ -374,27 +374,27 @@ function energy_gradients(p::TimoshenkoProblem, state, design)
         w′_e = (w[i+1] - w[i]) / h
         B_e  = B(θ_e, pr)
         S_e  = S(θ_e, pr)
-        γ_e  = ψ_e - w′_e
+        φ_e  = ψ_e - w′_e
 
         # Divergence of bending flux: +B_e·ψ'_e into cell i+1, −into cell i
         grad_ψ[i]   -= B_e * ψ′_e     # -∂ₓ(Bψ') contribution at cell i
         grad_ψ[i+1] += B_e * ψ′_e     # ∂ₓ(Bψ') contribution at cell i+1
 
-        # Shear term: S_e·γ_e distributed equally to both cells
-        grad_ψ[i]   += 0.5 * h * S_e * γ_e
-        grad_ψ[i+1] += 0.5 * h * S_e * γ_e
+        # Shear term: S_e·φ_e distributed equally to both cells
+        grad_ψ[i]   += 0.5 * h * S_e * φ_e
+        grad_ψ[i+1] += 0.5 * h * S_e * φ_e
     end
-    # Normalise: divide by h to get the L²-gradient (not integrated)
+    # Normalize: divide by h to get the L²-gradient (not integrated)
     grad_ψ ./= h
 
     # ---- Tip load contribution to grad_w ----
     # External work W = P·w(L) contributes -P to ∂U/∂w at the last cell.
     grad_w[n] -= pr.P
 
-    # ---- θ regularisation: +γ·θ'' ----
-    # We want ∂J/∂θ = ∂U/∂θ + γ·θ'' (Tikhonov).
+    # ---- θ regularisation: +φ·θ'' ----
+    # We want ∂J/∂θ = ∂U/∂θ + φ·θ'' (Tikhonov).
     # Discrete Laplacian with zero-flux (Neumann) BCs on θ:
-    grad_θ .+= _theta_laplacian(θ, pr.γ, h)
+    grad_θ .+= _theta_laplacian(θ, pr.φ, h)
 
     grad_state  = vcat(grad_w, grad_ψ)
     grad_design = grad_θ
@@ -468,14 +468,14 @@ function _potential_energy(w, ψ, θ, pr, g)
         ψ_e  = 0.5 * (ψ[i] + ψ[i+1])
         ψ′_e = (ψ[i+1] - ψ[i]) / h
         w′_e = (w[i+1] - w[i]) / h
-        γ_e  = ψ_e - w′_e
-        U   += 0.5 * h * (B(θ_e, pr) * ψ′_e^2 + S(θ_e, pr) * γ_e^2)
+        φ_e  = ψ_e - w′_e
+        U   += 0.5 * h * (B(θ_e, pr) * ψ′_e^2 + S(θ_e, pr) * φ_e^2)
     end
     U -= pr.P * w[n]   # tip work W = P·w(L)
     return U
 end
 
-# Discrete Dirichlet energy  (1/2) ∫ (θ')² dx — NOT pre-multiplied by γ
+# Discrete Dirichlet energy  (1/2) ∫ (θ')² dx — NOT pre-multiplied by φ
 function _dirichlet_energy(θ, g)
     n = g.n
     h = g.h
@@ -488,16 +488,16 @@ function _dirichlet_energy(θ, g)
 end
 
 # Discrete Laplacian for θ with zero-flux (Neumann) BCs.
-# Returns γ·θ'' as a vector of length n, for adding to grad_θ.
-function _theta_laplacian(θ, γ, h)
+# Returns φ·θ'' as a vector of length n, for adding to grad_θ.
+function _theta_laplacian(θ, φ, h)
     n   = length(θ)
     lap = zeros(n)
     for i in 2:n-1
-        lap[i] = γ * (θ[i-1] - 2θ[i] + θ[i+1]) / h^2
+        lap[i] = φ * (θ[i-1] - 2θ[i] + θ[i+1]) / h^2
     end
     # Neumann BC: one-sided differences at boundaries
     # θ'(0) = 0  ⟹  θ[0] = θ[1]  (ghost cell)
-    lap[1] = γ * (θ[2]   - θ[1])   / h^2   # second difference with ghost θ[0] = θ[1]
-    lap[n] = γ * (θ[n-1] - θ[n])   / h^2   # second difference with ghost θ[n+1] = θ[n]
+    lap[1] = φ * (θ[2]   - θ[1])   / h^2   # second difference with ghost θ[0] = θ[1]
+    lap[n] = φ * (θ[n-1] - θ[n])   / h^2   # second difference with ghost θ[n+1] = θ[n]
     return lap
 end

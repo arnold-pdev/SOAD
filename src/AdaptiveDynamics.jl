@@ -86,6 +86,7 @@ module AdaptiveDynamics
 
 using Printf
 using LinearAlgebra
+using Requires
 
 # ---- Problems --------------------------------------------------------------
 include("problems/Problem.jl")
@@ -116,5 +117,23 @@ include("solvers/SecondOrderSolver.jl")
 export AbstractSolver, SolverHistory
 export GradientFlowSolver, InertialSolver
 export solve!, current_state, current_design
+
+# ---- Plotting (optional, via Requires.jl) -----------------------------------
+export plot_convergence, plot_convergence_unicode
+export plot_solution_profiles, plot_design_field, plot_state_field
+export break_at_wraps
+
+# Stubs (overwritten when Plots/UnicodePlots load)
+function plot_convergence(hist; kwargs...) error("Load Plots for GUI plotting: using Plots") end
+function plot_convergence_unicode(hist) error("Load UnicodePlots for terminal plotting: using UnicodePlots") end
+function plot_solution_profiles(prob, hist; kwargs...) error("Load Plots: using Plots") end
+function plot_design_field(prob, θ; kwargs...) error("Load Plots: using Plots") end
+function plot_state_field(prob, state; kwargs...) error("Load Plots: using Plots") end
+break_at_wraps(x, θ) = error("break_at_wraps is defined in plotting/recipes.jl; load Plots: using Plots")
+
+function __init__()
+    @require UnicodePlots = "b8865323-c70e-4414-a5af-42eaca4e2ef0" include("plotting/unicode.jl")
+    @require Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80" include("plotting/recipes.jl")
+end
 
 end # module AdaptiveDynamics
