@@ -1,6 +1,6 @@
-# TOAD
+# SOAD
 
-A Julia framework for **inertial / dynamic-relaxation optimisation** with independent schedules for state and design variables. Built for structural optimisation problems where a fast state variable (e.g. displacement) is coupled to a slow design variable (e.g. material orientation).
+SOAD (Structural Optimization through Adaptive Dynamics) is a Julia framework for **inertial / dynamic-relaxation optimization** with independent schedules for state and design variables. Built for structural optimization problems where a fast state variable (e.g. displacement) is coupled to a slow design variable (e.g. material orientation).
 
 ## Features
 
@@ -14,8 +14,7 @@ A Julia framework for **inertial / dynamic-relaxation optimisation** with indepe
 ## Quick Start
 
 ```julia
-include("src/AdaptiveDynamics.jl")
-using .AdaptiveDynamics
+using SOAD  # or: include("src/SOAD.jl"); using .SOAD
 
 prob = TimoshenkoProblem()
 
@@ -57,9 +56,10 @@ Install `Plots` or `UnicodePlots` for convergence plots.
 ## Project Structure
 
 ```
-TOAD/
+SOAD/
 ├── src/
-│   ├── AdaptiveDynamics.jl    # Main module
+│   ├── SOAD.jl                # Package entry point
+│   ├── AutonomousDynamics.jl  # Main module
 │   ├── problems/
 │   │   ├── Problem.jl         # Abstract interface
 │   │   └── TimoshenkoProblem.jl
@@ -80,7 +80,7 @@ TOAD/
 
 | Component | Description |
 |-----------|-------------|
-| **AbstractProblem** | Interface for optimisation problems (state + design variables) |
+| **AbstractProblem** | Interface for optimization problems (state + design variables) |
 | **AbstractSchedule** | Provides (mass, damping) or adaptive params per step |
 | **AbstractSolver** | Integrates inertial dynamics using problem + schedules |
 

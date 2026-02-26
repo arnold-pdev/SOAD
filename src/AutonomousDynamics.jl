@@ -1,6 +1,6 @@
-# AdaptiveDynamics.jl — Main module entry point
+# AutonomousDynamics.jl — Main module entry point
 #
-# Framework for inertial / dynamic-relaxation optimisation with independent
+# Framework for inertial / dynamic-relaxation optimization with independent
 # schedules for state and design variables.
 #
 # Architecture overview
@@ -36,8 +36,8 @@
 # Quick start
 # -----------
 # ```julia
-# include("src/AdaptiveDynamics.jl")
-# using .AdaptiveDynamics
+# include("src/AutonomousDynamics.jl")
+# using .AutonomousDynamics
 #
 # prob = TimoshenkoProblem()
 #
@@ -82,7 +82,7 @@
 # 2. Implement `step!(s::MySchedule, k, t, grad, vel) -> ScheduleParams`.
 # 3. Add include + export below.
 
-module AdaptiveDynamics
+module AutonomousDynamics
 
 using Printf
 using LinearAlgebra
@@ -98,6 +98,7 @@ export state_dim, design_dim, initial_state, initial_design
 export energy_gradients, equilibrium_state, objective
 export enforce_state_bcs!, enforce_design_bcs!, stable_dt
 export grid_points, problem_name
+export residual, obj_state_grad, apply_stiffness, residual_design_grad
 
 # ---- Schedules -------------------------------------------------------------
 include("schedules/Schedule.jl")
@@ -109,14 +110,30 @@ export AbstractSchedule, ScheduleParams
 export ConstantSchedule, NesterovSchedule, FIRESchedule
 export step!, reset!
 
-# ---- Solvers ---------------------------------------------------------------
+# ---- Integrators -----------------------------------------------------------
+include("integrators/Integrator.jl")
+include("integrators/SymplecticEuler.jl")
+include("integrators/RK4.jl")
+
+export AbstractIntegrator, SymplecticEuler, RK4Integrator
+export integrate!
+
+# ---- Solvers — shared infrastructure ---------------------------------------
 include("solvers/Solver.jl")
-include("solvers/FirstOrderSolver.jl")
-include("solvers/SecondOrderSolver.jl")
 
 export AbstractSolver, SolverHistory
-export GradientFlowSolver, InertialSolver
 export solve!, current_state, current_design
+
+# ---- Solvers — compliance (2-player) ---------------------------------------
+include("solvers/compliance/GradientFlowSolver.jl")
+include("solvers/compliance/InertialSolver.jl")
+
+export GradientFlowSolver, InertialSolver
+
+# ---- Solvers — general (3-player λ) ----------------------------------------
+include("solvers/general/LambdaSolver.jl")
+
+export LambdaSolver, current_lambda, FixedRatio, AdaptiveTol
 
 # ---- Plotting (optional, via Requires.jl) -----------------------------------
 export plot_convergence, plot_convergence_unicode
@@ -136,4 +153,4 @@ function __init__()
     @require Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80" include("plotting/recipes.jl")
 end
 
-end # module AdaptiveDynamics
+end # module AutonomousDynamics

@@ -778,7 +778,7 @@ deps = ["Artifacts", "Libdl", "libblastrampoline_jll"]
 uuid = "bea87d4a-7f5b-5778-9afe-8cc45184846c"
 version = "7.8.3+2"
 
-[[deps.TOAD]]
+[[deps.SOAD]]
 deps = ["LinearAlgebra", "Printf", "Requires"]
 path = "."
 uuid = "00000000-0000-0000-0000-000000000001"

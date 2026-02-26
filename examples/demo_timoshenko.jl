@@ -1,4 +1,4 @@
-# demo_timoshenko.jl — Demonstration of AdaptiveDynamics on the Timoshenko beam
+# demo_timoshenko.jl — Demonstration of SOAD on the Timoshenko beam
 #
 # This script runs four solver configurations on the same problem and plots
 # the convergence history so they can be compared side by side:
@@ -12,14 +12,14 @@
 # The comparison (B) vs (C) isolates the acceleration effect at fixed mode.
 # The comparison (C) vs (D) compares two adaptive schedules.
 #
-# Run from the adaptive_dynamics directory:
+# Run from the SOAD project root:
 #   julia --project=. examples/demo_timoshenko.jl
 
 import Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 
-include(joinpath(@__DIR__, "..", "src", "AdaptiveDynamics.jl"))
-using .AdaptiveDynamics
+include(joinpath(@__DIR__, "..", "src", "SOAD.jl"))
+using .SOAD
 using Printf
 
 # ============================================================

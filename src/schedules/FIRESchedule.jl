@@ -1,7 +1,7 @@
 # FIRESchedule.jl — Fast Inertial Relaxation Engine schedule
 #
 # FIRE (Bitzek et al., PRL 2006) is an adaptive damping scheme developed for
-# molecular dynamics but widely applicable to structural optimisation.  The
+# molecular dynamics but widely applicable to structural optimization.  The
 # core idea is:
 #
 #   1. If the current "power"  P = −∇f · v > 0  (gradient and velocity agree),
@@ -48,8 +48,8 @@ The scheduler maintains internal state:
 On each `step!` call:
 - Computes power  P = dot(grad, vel)  (note: sign depends on ascent/descent
   convention; the solver should pass `grad` with the sign appropriate to the
-  *descent* direction, i.e. always pass −∇f for a minimiser or +∇f for a
-  maximiser so that P > 0 means "moving in the right direction").
+  *descent* direction, i.e. always pass −∇f for a minimizer or +∇f for a
+  maximizer so that P > 0 means "moving in the right direction").
 - Returns `ScheduleParams(mass=1, damping=α, restart)`.
 
 The mass is always 1; all adaptation appears through damping and restart.
@@ -91,9 +91,9 @@ end
 Advance the FIRE scheduler.
 
 The `grad` argument should be the *negative* of the force direction:
-- For a state variable being minimised, pass +∂U/∂u (so P = −∇f·v > 0 when
+- For a state variable being minimized, pass +∂U/∂u (so P = −∇f·v > 0 when
   the velocity is going downhill).
-- For a design variable being maximised, pass −∂J/∂θ (same convention).
+- For a design variable being maximized, pass −∂J/∂θ (same convention).
 
 In practice, the solvers in this framework pass the raw gradient with the
 solver's sign convention, so each problem's solver wrapper is responsible for

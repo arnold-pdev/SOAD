@@ -4,12 +4,12 @@
 # schedules (one for the state, one for the design) and integrates the
 # inertial dynamics forward in time.
 #
-# The continuous equations being discretised are
+# The continuous equations being discretized are
 #
-#   State (fast variable, typically minimised):
+#   State (fast variable, typically minimized):
 #       m_u · ü  +  α_u · u̇  =  −∂U/∂u
 #
-#   Design (slow variable, here maximised for compliance):
+#   Design (slow variable, here maximized for compliance):
 #       m_θ · θ̈  +  α_θ · θ̇  =  +∂J/∂θ
 #
 # where (m, α) are provided by the respective schedulers.
@@ -50,38 +50,52 @@ solver.
 Fields
 ------
 Scalar time series (always recorded):
-- `t`            : Vector{Float64} — simulation time at each record point
-- `objective`    : Vector{Float64} — J(u, θ)
-- `grad_state_norm` : Vector{Float64} — ‖∂U/∂u‖_L²
-- `grad_design_norm` : Vector{Float64} — ‖∂J/∂θ‖_L²
-- `vel_state_norm`  : Vector{Float64} — ‖u̇‖_L²
-- `vel_design_norm` : Vector{Float64} — ‖θ̇‖_L²
+- `t`                    : simulation time at each record point
+- `objective`            : J(u, θ)
+- `grad_state_norm`      : ‖F_u‖_L²  (force on state)
+- `grad_design_norm`     : ‖F_θ‖_L²  (force on design)
+- `vel_state_norm`       : ‖u̇‖_L²
+- `vel_design_norm`      : ‖θ̇‖_L²
+
+Lambda fields (non-zero only when using LambdaSolver):
+- `grad_lambda_norm`     : ‖F_λ‖_L²  (force on adjoint)
+- `vel_lambda_norm`      : ‖λ̇‖_L²
+- `lambda_state_residual`: ‖λ + u‖ / ‖u‖  (→ 0 for compliance at saddle)
 
 Field snapshots (recorded when save_fields = true):
-- `state_snapshots`  : Vector{Vector{Float64}}  — list of state vectors
-- `design_snapshots` : Vector{Vector{Float64}}  — list of design vectors
+- `state_snapshots`      : list of state vectors
+- `design_snapshots`     : list of design vectors
+- `lambda_snapshots`     : list of lambda vectors (empty for 2-player solvers)
 """
 mutable struct SolverHistory
     # Time stamps
-    t                ::Vector{Float64}
+    t                    ::Vector{Float64}
 
-    # Scalar diagnostics
-    objective        ::Vector{Float64}
-    grad_state_norm  ::Vector{Float64}
-    grad_design_norm ::Vector{Float64}
-    vel_state_norm   ::Vector{Float64}
-    vel_design_norm  ::Vector{Float64}
+    # Scalar diagnostics (2-player and 3-player)
+    objective            ::Vector{Float64}
+    grad_state_norm      ::Vector{Float64}
+    grad_design_norm     ::Vector{Float64}
+    vel_state_norm       ::Vector{Float64}
+    vel_design_norm      ::Vector{Float64}
+
+    # Lambda diagnostics (3-player only; empty for compliance solvers)
+    grad_lambda_norm     ::Vector{Float64}
+    vel_lambda_norm      ::Vector{Float64}
+    lambda_state_residual::Vector{Float64}
 
     # Optional field snapshots
-    state_snapshots  ::Vector{Vector{Float64}}
-    design_snapshots ::Vector{Vector{Float64}}
+    state_snapshots      ::Vector{Vector{Float64}}
+    design_snapshots     ::Vector{Vector{Float64}}
+    lambda_snapshots     ::Vector{Vector{Float64}}
 end
 
 SolverHistory() = SolverHistory(
     Float64[], Float64[], Float64[], Float64[], Float64[], Float64[],
-    Vector{Float64}[], Vector{Float64}[]
+    Float64[], Float64[], Float64[],
+    Vector{Float64}[], Vector{Float64}[], Vector{Float64}[]
 )
 
+# Record for 2-player (compliance) solvers — lambda fields left empty
 function _record!(h::SolverHistory, t, J, gs, gd, vs, vd, state, design, save_fields)
     push!(h.t,                t)
     push!(h.objective,        J)
@@ -92,6 +106,25 @@ function _record!(h::SolverHistory, t, J, gs, gd, vs, vd, state, design, save_fi
     if save_fields
         push!(h.state_snapshots,  copy(state))
         push!(h.design_snapshots, copy(design))
+    end
+end
+
+# Record for 3-player (LambdaSolver) — all fields populated
+function _record_lambda!(h::SolverHistory, t, J, gs, gl, gd, vs, vl, vd, lsr,
+                         state, lambda, design, save_fields)
+    push!(h.t,                     t)
+    push!(h.objective,             J)
+    push!(h.grad_state_norm,       gs)
+    push!(h.grad_lambda_norm,      gl)
+    push!(h.grad_design_norm,      gd)
+    push!(h.vel_state_norm,        vs)
+    push!(h.vel_lambda_norm,       vl)
+    push!(h.vel_design_norm,       vd)
+    push!(h.lambda_state_residual, lsr)
+    if save_fields
+        push!(h.state_snapshots,  copy(state))
+        push!(h.design_snapshots, copy(design))
+        push!(h.lambda_snapshots, copy(lambda))
     end
 end
 

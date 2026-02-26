@@ -1,7 +1,7 @@
-name = "TOAD"
+name = "SOAD"
 uuid = "00000000-0000-0000-0000-000000000001"
 version = "0.1.0"
-authors = ["TOAD contributors"]
+authors = ["SOAD contributors"]
 
 [deps]
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"

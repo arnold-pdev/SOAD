@@ -25,10 +25,10 @@
 #
 # where δ is a phase offset between the bending and shear anisotropy axes.
 #
-# Discretisation
+# Discretization
 # --------------
 # Staggered finite-difference grid with n cells:
-#   cell centres:  xᵢ = (i - 1/2)h,  i = 1,…,n   (w, ψ, θ live here)
+#   cell centers:  xᵢ = (i - 1/2)h,  i = 1,…,n   (w, ψ, θ live here)
 #   cell edges:    x_{i+1/2} = i·h,  i = 0,…,n   (fluxes computed here)
 #   h = L/n
 #
@@ -42,7 +42,7 @@
 # energy_gradients returns (grad_state, grad_design) where:
 #   grad_state[1:n]       = ∂U/∂w (positive → decreases w to reduce U)
 #   grad_state[n+1:2n]    = ∂U/∂ψ
-#   grad_design           = ∂J/∂θ (positive → increases θ; minimising J
+#   grad_design           = ∂J/∂θ (positive → increases θ; minimizing J
 #                                   means moving opposite to grad_design)
 #
 # The solver is responsible for deciding the sign (ascent vs descent) and
@@ -66,7 +66,7 @@ Fields
 - `S0`  : baseline shear stiffness
 - `ΔS`  : shear stiffness anisotropy amplitude
 - `δ`   : phase offset between bending and shear anisotropy (radians)
-- `φ`   : Tikhonov regularisation weight on ∫(θ')²
+- `φ`   : Tikhonov regularization weight on ∫(θ')²
 - `n`   : number of grid cells
 """
 struct TimoshenkoParams
@@ -124,7 +124,7 @@ end
 struct StaggeredGrid
     n    ::Int
     h    ::Float64
-    x    ::Vector{Float64}   # cell centres
+    x    ::Vector{Float64}   # cell centers
 end
 
 function StaggeredGrid(L::Float64, n::Int)
@@ -141,7 +141,7 @@ end
     TimoshenkoProblem
 
 Concrete implementation of `AbstractProblem` for the orthotropic Timoshenko
-cantilever beam orientation-optimisation problem.
+cantilever beam orientation-optimization problem.
 
 Construction
 ------------
@@ -200,7 +200,7 @@ initial_design(p::TimoshenkoProblem) = fill(π/4, p.grid.n)
 
 Enforce the clamped (Dirichlet) BC: w(0) = ψ(0) = 0.
 
-On the staggered grid the first cell centre is at x₁ = h/2.  The effective
+On the staggered grid the first cell center is at x₁ = h/2.  The effective
 Dirichlet condition is applied by zeroing the first cell value, which is a
 standard ghost-cell / half-cell interpretation consistent with the finite-
 difference stencil used in `energy_gradients`.
@@ -298,8 +298,8 @@ The functional derivative of J w.r.t. θ is:
 
     δJ/δθ = (1/2)[B'(θ)(ψ')² + S'(θ)(ψ - w')²] + φ·θ''
 
-All spatial derivatives are discretized with second-order centred differences
-on the staggered grid.  Edge-centred quantities are computed as arithmetic
+All spatial derivatives are discretized with second-order centered differences
+on the staggered grid.  Edge-centered quantities are computed as arithmetic
 averages of adjacent cell values.
 """
 function energy_gradients(p::TimoshenkoProblem, state, design)
@@ -358,7 +358,7 @@ function energy_gradients(p::TimoshenkoProblem, state, design)
 
         # ---- grad_θ : ∂J/∂θ from stiffness anisotropy ----
         # δJ/δθ (edge contribution) = (h/2)[dB·(ψ'²) + dS·φ²]  per edge
-        # Split equally between the two adjacent cell centres.
+        # Split equally between the two adjacent cell centers.
         dE_dθ_edge = 0.5*h * (dB_e * ψ′_e^2 + dS_e * φ_e^2)
         grad_θ[i]      += 0.5 * dE_dθ_edge
         grad_θ[i+1]    += 0.5 * dE_dθ_edge
@@ -391,7 +391,7 @@ function energy_gradients(p::TimoshenkoProblem, state, design)
     # External work W = P·w(L) contributes -P to ∂U/∂w at the last cell.
     grad_w[n] -= pr.P
 
-    # ---- θ regularisation: +φ·θ'' ----
+    # ---- θ regularization: +φ·θ'' ----
     # We want ∂J/∂θ = ∂U/∂θ + φ·θ'' (Tikhonov).
     # Discrete Laplacian with zero-flux (Neumann) BCs on θ:
     grad_θ .+= _theta_laplacian(θ, pr.φ, h)
@@ -432,11 +432,11 @@ function equilibrium_state(p::TimoshenkoProblem, design)
     w  = zeros(n)
     ψ  = zeros(n)
 
-    # Precompute dψ/dx = P(L - x) / B(θ) at each cell centre
+    # Precompute dψ/dx = P(L - x) / B(θ) at each cell center
     dψdx = [pr.P * (pr.L - x[i]) / B(θ[i], pr) for i in 1:n]
 
     # Integrate from x=0 (cell 1 is at h/2; ghost cell at 0 has ψ=w=0)
-    # Use trapezoidal rule between consecutive cell centres.
+    # Use trapezoidal rule between consecutive cell centers.
     # For cell 1: integrate from 0 to x₁ ≈ h/2 using midpoint rule
     ψ[1] = dψdx[1] * x[1]
     w[1] = (pr.P / S(θ[1], pr)) * x[1]   # ψ(0)=0, so dw/dx ≈ P/S at left
@@ -452,6 +452,172 @@ function equilibrium_state(p::TimoshenkoProblem, design)
     end
 
     return vcat(w, ψ)
+end
+
+# ============================================================
+#  General (3-player λ) interface
+# ============================================================
+
+"""
+    residual(p::TimoshenkoProblem, state, design) -> Vector{Float64}
+
+Equilibrium residual R(u, θ) = A(θ)u − f for the Timoshenko beam.
+
+For compliance, this equals the `grad_state` returned by `energy_gradients`
+(they are the same computation).  Exposed separately so the λ-solver can
+call it without also computing grad_design.
+"""
+function residual(p::TimoshenkoProblem, state, design)
+    grad_state, _ = energy_gradients(p, state, design)
+    return grad_state
+end
+
+"""
+    obj_state_grad(p::TimoshenkoProblem, state, design) -> Vector{Float64}
+
+∂J/∂u for the compliance objective J = ⟨f, u⟩ = −P·w(L).
+
+The functional derivative is the load vector: δJ/δw = −P·δ(x−L) at the tip,
+δJ/δψ = 0 everywhere.  In the discrete setting this is a vector of zeros
+except for index n (last w-cell), which holds −P.
+
+This is constant (independent of state and design) for compliance, but the
+interface is defined for general time-varying objectives.
+"""
+function obj_state_grad(p::TimoshenkoProblem, state, design)
+    n   = p.grid.n
+    g   = zeros(2n)
+    g[n] = -p.params.P   # δJ/δw at tip cell; δJ/δψ = 0
+    return g
+end
+
+"""
+    apply_stiffness(p::TimoshenkoProblem, design, v) -> Vector{Float64}
+
+Apply the Timoshenko stiffness operator A(θ) to an arbitrary vector
+v = [v_w; v_ψ] (same shape as state), returning A(θ)v ∈ V*.
+
+This runs the same bending+shear stencil as `energy_gradients` but with v
+substituted for the state and **without** subtracting the tip load f.
+Concretely:
+
+    residual(p, u, θ) = apply_stiffness(p, θ, u) − obj_state_grad(p, u, θ)
+
+since for compliance ∂J/∂u = f = load, and A(θ)u − f = R(u,θ).
+
+Used in the λ-solver to compute A(θ)λ for the forces F_u and F_λ.
+"""
+function apply_stiffness(p::TimoshenkoProblem, design, v)
+    pr = p.params
+    g  = p.grid
+    n  = g.n
+    h  = g.h
+    θ  = design
+
+    v_w = @view v[1:n]
+    v_ψ = @view v[n+1:2n]
+
+    Av_w = zeros(n)
+    Av_ψ = zeros(n)
+
+    for i in 1:n-1
+        θ_e   = 0.5 * (θ[i] + θ[i+1])
+        vψ_e  = 0.5 * (v_ψ[i] + v_ψ[i+1])
+        vψ′_e = (v_ψ[i+1] - v_ψ[i]) / h
+        vw′_e = (v_w[i+1] - v_w[i]) / h
+        B_e   = B(θ_e, pr)
+        S_e   = S(θ_e, pr)
+        γ_e   = vψ_e - vw′_e   # shear strain of v
+
+        # Shear flux contribution to Av_w (divergence of S·γ)
+        flux_w       = S_e * γ_e
+        Av_w[i]     += flux_w
+        Av_w[i+1]   -= flux_w
+    end
+
+    # Bending + shear contributions to Av_ψ (two-pass, clean accumulation)
+    for i in 1:n-1
+        θ_e   = 0.5 * (θ[i] + θ[i+1])
+        vψ_e  = 0.5 * (v_ψ[i] + v_ψ[i+1])
+        vψ′_e = (v_ψ[i+1] - v_ψ[i]) / h
+        vw′_e = (v_w[i+1] - v_w[i]) / h
+        B_e   = B(θ_e, pr)
+        S_e   = S(θ_e, pr)
+        γ_e   = vψ_e - vw′_e
+
+        # Divergence of bending flux B·vψ'
+        Av_ψ[i]   -= B_e * vψ′_e
+        Av_ψ[i+1] += B_e * vψ′_e
+
+        # Shear term distributed equally to adjacent cells
+        Av_ψ[i]   += 0.5 * h * S_e * γ_e
+        Av_ψ[i+1] += 0.5 * h * S_e * γ_e
+    end
+    Av_ψ ./= h
+
+    return vcat(Av_w, Av_ψ)
+end
+
+"""
+    residual_design_grad(p::TimoshenkoProblem, state, design, lambda) -> Vector{Float64}
+
+Compute (∂R/∂θ)ᵀ λ — the adjoint-weighted sensitivity of the residual with
+respect to the design θ.
+
+For the Timoshenko beam with R(u,θ) = A(θ)u − f:
+
+    (∂R/∂θ)ᵀ λ = (∂A/∂θ · u)ᵀ λ
+
+The bilinear form ⟨λ, (∂A/∂θ[i])u⟩ evaluated at cell i gives a scalar
+sensitivity.  Using the edge-averaged stiffness derivatives:
+
+    δ⟨λ, Au⟩/δθ_i = (1/2) h · [dB(θ_e) · λψ'·uψ' + dS(θ_e) · λγ·uγ]
+
+summed over adjacent edges, where uγ = uψ − uw' and λγ = λψ − λw'.
+
+This is the same stencil as the design gradient in `energy_gradients`, but
+with u and λ in the two "slots" of the bilinear form instead of u in both.
+"""
+function residual_design_grad(p::TimoshenkoProblem, state, design, lambda)
+    pr = p.params
+    g  = p.grid
+    n  = g.n
+    h  = g.h
+    θ  = design
+
+    u_w = @view state[1:n]
+    u_ψ = @view state[n+1:2n]
+    λ_w = @view lambda[1:n]
+    λ_ψ = @view lambda[n+1:2n]
+
+    sens = zeros(n)
+
+    for i in 1:n-1
+        θ_e   = 0.5 * (θ[i] + θ[i+1])
+        dB_e  = dB(θ_e, pr)
+        dS_e  = dS(θ_e, pr)
+
+        # State strain fields at edge i
+        uψ′_e = (u_ψ[i+1] - u_ψ[i]) / h
+        uw′_e = (u_w[i+1] - u_w[i]) / h
+        uψ_e  = 0.5 * (u_ψ[i] + u_ψ[i+1])
+        uγ_e  = uψ_e - uw′_e
+
+        # Adjoint strain fields at edge i
+        λψ′_e = (λ_ψ[i+1] - λ_ψ[i]) / h
+        λw′_e = (λ_w[i+1] - λ_w[i]) / h
+        λψ_e  = 0.5 * (λ_ψ[i] + λ_ψ[i+1])
+        λγ_e  = λψ_e - λw′_e
+
+        # Adjoint-weighted sensitivity: ⟨λ, dA/dθ · u⟩ at this edge
+        dsens_edge = 0.5 * h * (dB_e * λψ′_e * uψ′_e + dS_e * λγ_e * uγ_e)
+
+        # Split equally to adjacent cell centers
+        sens[i]   += 0.5 * dsens_edge
+        sens[i+1] += 0.5 * dsens_edge
+    end
+
+    return sens
 end
 
 # ============================================================
